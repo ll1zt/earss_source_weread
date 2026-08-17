@@ -150,6 +150,21 @@ defmodule EarssSourceWeread.MP do
   defp num(_), do: 0
 
   @doc """
+  Review detail for a `reviewId` — carries `mpInfo.doc_url`, the **real public
+  mp.weixin.qq.com long link** for WeRead-internal articles (reviewId tails
+  containing `~` are internal ids with no short link; `doc_url` is the
+  canonical `__biz`/`mid`/`sn` URL).
+  """
+  @spec review_single(String.t()) :: {:ok, map()} | {:error, term()}
+  def review_single(review_id) when is_binary(review_id) and review_id != "" do
+    case Client.get_json("/web/mp/review/single", query: %{"reviewId" => review_id}) do
+      {:ok, %{"review" => review}} when is_map(review) -> {:ok, review}
+      {:ok, data} -> {:ok, data}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
   Full article HTML body for a `reviewId`. Extracts `#js_content` markup.
 
   Returns `{:ok, html}` or `{:error, :content_not_found}` when the body of the

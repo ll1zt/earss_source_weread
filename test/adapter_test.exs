@@ -349,15 +349,50 @@ defmodule EarssSourceWeread.AdapterTest do
       assert e.content =~ "cookie通道正文"
     end
 
-    test "tokens containing ~ go straight to the weread channel", %{bypass: bypass} do
+    test "~ ids resolve doc_url and fetch it publicly", %{bypass: bypass} do
       t = "token~tilde"
       review = "MP_WXS_100001_#{t}"
       stub_articles(bypass, @mp1, [{t, "甲第一~篇", "摘要1", 1_786_925_450}])
 
-      # public endpoint is never called (no /s/ stub → any hit fails loudly)
-      Bypass.expect(bypass, "GET", "/web/mp/content", fn conn ->
+      doc_url = "http://localhost:#{bypass.port}/s?__biz=Mzkw&mid=1&idx=1&sn=abc#rd"
+
+      Bypass.expect(bypass, "GET", "/web/mp/review/single", fn conn ->
         assert conn.query_string =~ review
 
+        json_resp(conn, %{
+          "errCode" => 0,
+          "review" => %{"mpInfo" => %{"doc_url" => doc_url, "originalId" => t}}
+        })
+      end)
+
+      # the public long link is fetched (request_path "/s" matches query-form links)
+      Bypass.expect(bypass, "GET", "/s", fn conn ->
+        assert conn.query_string =~ "__biz=Mzkw"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html", "utf-8")
+        |> Plug.Conn.resp(
+          200,
+          "<html><body><div id=\"js_content\"><p>长链接公开正文</p></div></body></html>"
+        )
+      end)
+
+      feed = %{link: "earss://weread/mp/#{@mp1}", adapter_cursor: %{}}
+
+      assert {:ok, %{entries: [e]}} = Adapter.fetch(feed)
+      assert e.content =~ "长链接公开正文"
+      assert e.link == doc_url
+    end
+
+    test "~ ids without doc_url fall back to the weread channel", %{bypass: bypass} do
+      t = "token~tilde"
+      stub_articles(bypass, @mp1, [{t, "甲第一~篇", "摘要1", 1_786_925_450}])
+
+      Bypass.expect(bypass, "GET", "/web/mp/review/single", fn conn ->
+        json_resp(conn, %{"errCode" => 0, "review" => %{"mpInfo" => %{}}})
+      end)
+
+      Bypass.expect(bypass, "GET", "/web/mp/content", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("text/html", "utf-8")
         |> Plug.Conn.resp(

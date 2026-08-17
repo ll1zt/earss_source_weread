@@ -17,15 +17,9 @@ defmodule EarssSourceWeread.Public do
 
   alias EarssSourceWeread.{Config, Extract}
 
-  @spec fetch(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def fetch(original_id) when is_binary(original_id) and original_id != "" do
-    base =
-      case Config.public_base_url() do
-        nil -> "https://mp.weixin.qq.com"
-        url -> String.trim_trailing(url, "/")
-      end
-
-    url = base <> "/s/#{original_id}"
+  @doc "Fetch the article body from a full public URL (mp.weixin.qq.com long/short link)."
+  @spec fetch_url(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def fetch_url(url) when is_binary(url) and url != "" do
     headers = [{"user-agent", Config.public_ua()}]
 
     case Req.get(url,
@@ -55,6 +49,17 @@ defmodule EarssSourceWeread.Public do
       {:error, exception} ->
         {:error, {:http, exception}}
     end
+  end
+
+  @spec fetch(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def fetch(original_id) when is_binary(original_id) and original_id != "" do
+    base =
+      case Config.public_base_url() do
+        nil -> "https://mp.weixin.qq.com"
+        url -> String.trim_trailing(url, "/")
+      end
+
+    fetch_url(base <> "/s/#{original_id}")
   end
 
   def fetch(_), do: {:error, :invalid_token}

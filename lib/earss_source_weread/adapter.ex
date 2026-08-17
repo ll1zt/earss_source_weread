@@ -290,16 +290,28 @@ defmodule EarssSourceWeread.Adapter do
   end
 
   defp maybe_content(entry, item) do
-    review_id = item["review_id"]
-    original_id = item["original_id"]
-
     # mp.weixin.qq.com short tokens never contain `~`; when WeRead's
-    # reviewId tail has one it is an internal id — the public URL is a dead
-    # link (参数错误 page), so go straight to the cookie channel.
-    if Config.content_fallback_weread?() and String.contains?(original_id || "", "~") do
-      weread_content(entry, review_id)
+    # reviewId tail has one it is an internal id — resolve the real public
+    # long link (mpInfo.doc_url) via /web/mp/review/single and fetch that.
+    if Config.content_fallback_weread?() and String.contains?(item["original_id"] || "", "~") do
+      doc_url_content(entry, item)
     else
       public_content(entry, item)
+    end
+  end
+
+  # `~` internal id → real public long link → public fetch (no cookie).
+  # Falls back to WeRead's cookie channel when the link is unavailable.
+  defp doc_url_content(entry, item) do
+    interval = Config.request_interval_ms()
+    if interval > 0, do: Process.sleep(interval)
+
+    case MP.review_single(item["review_id"]) do
+      {:ok, %{"mpInfo" => %{"doc_url" => url}}} when is_binary(url) and url != "" ->
+        public_fetch_or_fallback(%{entry | link: url}, url, item)
+
+      _ ->
+        weread_content(entry, item["review_id"])
     end
   end
 
@@ -325,6 +337,34 @@ defmodule EarssSourceWeread.Adapter do
   rescue
     e ->
       Logger.warning("weread public content crashed for #{item["review_id"]}: #{inspect(e)}")
+
+      if Config.content_fallback_weread?() do
+        weread_content(entry, item["review_id"])
+      else
+        entry
+      end
+  end
+
+  defp public_fetch_or_fallback(entry, url, item) do
+    interval = Config.public_content_interval_ms()
+    if interval > 0, do: Process.sleep(interval)
+
+    case Public.fetch_url(url) do
+      {:ok, html} when is_binary(html) and html != "" ->
+        Map.put(entry, :content, html)
+
+      {:error, reason} ->
+        Logger.warning("weread public fetch failed for #{item["review_id"]}: #{inspect(reason)}")
+
+        if Config.content_fallback_weread?() do
+          weread_content(entry, item["review_id"])
+        else
+          entry
+        end
+    end
+  rescue
+    e ->
+      Logger.warning("weread public fetch crashed for #{item["review_id"]}: #{inspect(e)}")
 
       if Config.content_fallback_weread?() do
         weread_content(entry, item["review_id"])
