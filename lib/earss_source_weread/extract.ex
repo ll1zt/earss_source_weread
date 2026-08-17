@@ -100,6 +100,16 @@ defmodule EarssSourceWeread.Extract do
                 _ -> attrs
               end
 
+            # WeChat's image CDN (mmbiz.qpic.cn) hotlink-protects by Referer:
+            # renderers (e.g. NetNewsWire) send the earss host as Referer and
+            # get the "未经允许不可引用" placeholder. no-referrer makes the
+            # browser fetch without Referer, which the CDN allows.
+            attrs =
+              case find_attr(attrs, "referrerpolicy") do
+                nil -> [{"referrerpolicy", "no-referrer"} | attrs]
+                _ -> attrs
+              end
+
             {"img", attrs, children}
         end
 

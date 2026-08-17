@@ -73,4 +73,18 @@ defmodule EarssSourceWeread.ExtractTest do
     refute out =~ "style"
     assert out =~ "<p>x</p>"
   end
+
+  test "adds referrerpolicy=no-referrer to images (hotlink guard)" do
+    html =
+      ~s(<html><body><div id="js_content">) <>
+        ~s(<img data-src="https://mmbiz.qpic.cn/x.jpg"><img src="https://mmbiz.qpic.cn/y.jpg" referrerpolicy="origin">) <>
+        ~s(</div></body></html>)
+
+    assert {:ok, out} = Extract.js_content(html)
+    assert out =~ ~s(src="https://mmbiz.qpic.cn/x.jpg")
+    assert out =~ ~s(referrerpolicy="no-referrer")
+    # an existing policy is kept as-is, not duplicated
+    assert length(Regex.scan(~r/referrerpolicy="no-referrer"/, out)) == 1
+    assert out =~ ~s(referrerpolicy="origin")
+  end
 end
