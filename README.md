@@ -11,8 +11,10 @@ and depends **only** on `earss_source` — never on Earss internals (C2).
 
 | Route | Description | Example |
 |-------|-------------|---------|
-| `weread/shelf` | 书架合流 — latest article of **every** 公众号 on your bookshelf, merged into one feed (`author` = 公众号名) | `earss://weread/shelf` |
-| `weread/mp/:bookId` | A single 公众号's latest article. `bookId` accepts `MP_WXS_<数字>` or bare digits (auto-prefixed) | `earss://weread/mp/MP_WXS_3528995129` |
+| `weread/shelf` | 书架合流 — recent articles of **every** 公众号 on your bookshelf, merged into one feed (`author` = 公众号名) | `earss://weread/shelf` |
+| `weread/shelf?mps=…` | same, but **only** the listed 公众号 (comma-separated `MP_WXS_…` or bare digits) | `earss://weread/shelf?mps=MP_WXS_3905719449,MP_WXS_3257158750` |
+| `weread/shelf?exclude=…` | same, minus the listed 公众号 | `earss://weread/shelf?exclude=MP_WXS_3537946179` |
+| `weread/mp/:bookId` | A single 公众号's articles. `bookId` accepts `MP_WXS_<数字>` or bare digits (auto-prefixed) | `earss://weread/mp/MP_WXS_3528995129` |
 
 `source_url` is stable per logical route (bookId canonicalized once), so OPML
 round-trips and multi-user subscriptions keep working.

@@ -106,6 +106,27 @@ defmodule EarssSourceWeread.AdapterTest do
       assert {:ok, %{min_refresh_interval: 30, default_refresh_interval: 60}} =
                Adapter.resolve("earss://weread/shelf")
     end
+
+    test "shelf with mps whitelist filter", %{bypass: _} do
+      assert {:ok,
+              %{
+                source_url: "earss://weread/shelf?mps=MP_WXS_100001,MP_WXS_100002",
+                meta: %{mps: ["MP_WXS_100001", "MP_WXS_100002"], exclude: []}
+              }} = Adapter.resolve("earss://weread/shelf?mps=100001,MP_WXS_100002")
+    end
+
+    test "shelf with exclude filter", %{bypass: _} do
+      assert {:ok,
+              %{
+                source_url: "earss://weread/shelf?exclude=MP_WXS_100003",
+                meta: %{mps: [], exclude: ["MP_WXS_100003"]}
+              }} =
+               Adapter.resolve("earss://weread/shelf?exclude=100003")
+    end
+
+    test "shelf filter rejects invalid book ids", %{bypass: _} do
+      assert {:error, :invalid_book_id} = Adapter.resolve("earss://weread/shelf?mps=foo")
+    end
   end
 
   describe "fetch/2 — shelf (article list, no content)" do
@@ -208,6 +229,43 @@ defmodule EarssSourceWeread.AdapterTest do
 
       feed = %{link: "earss://weread/shelf", adapter_cursor: %{}}
       assert {:error, {:weread_auth, -2012}} = Adapter.fetch(feed)
+    end
+
+    test "mps whitelist fetches only the listed 公众号", %{bypass: bypass} do
+      stub_shelf(bypass, [
+        %{"bookId" => @mp1, "title" => "甲"},
+        %{"bookId" => @mp2, "title" => "乙"}
+      ])
+
+      # only @mp1 is requested
+      Bypass.expect(bypass, "GET", "/web/mp/articles", fn conn ->
+        assert conn.query_string =~ @mp1
+        json_resp(conn, articles_body(@mp1, [{@t1, "甲第一篇", "摘要1", 1_786_925_450}]))
+      end)
+
+      feed = %{link: "earss://weread/shelf?mps=#{@mp1}", adapter_cursor: %{}}
+
+      assert {:ok, %{entries: [e], cursor: %{"seen" => seen}}} = Adapter.fetch(feed)
+      assert e.author == "公众号#{@mp1}"
+      assert seen == %{@mp1 => @review1}
+    end
+
+    test "exclude skips the listed 公众号", %{bypass: bypass} do
+      stub_shelf(bypass, [
+        %{"bookId" => @mp1, "title" => "甲"},
+        %{"bookId" => @mp2, "title" => "乙"}
+      ])
+
+      # only @mp2 is requested
+      Bypass.expect(bypass, "GET", "/web/mp/articles", fn conn ->
+        assert conn.query_string =~ @mp2
+        json_resp(conn, articles_body(@mp2, [{@t2, "乙第一篇", "摘要2", 1_786_800_000}]))
+      end)
+
+      feed = %{link: "earss://weread/shelf?exclude=#{@mp1}", adapter_cursor: %{}}
+
+      assert {:ok, %{entries: [e]}} = Adapter.fetch(feed)
+      assert e.author == "公众号#{@mp2}"
     end
   end
 

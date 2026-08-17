@@ -7,6 +7,10 @@ defmodule EarssSourceWeread.Adapter do
     * `earss://weread/shelf` — 书架合流: recent articles of every 公众号
       subscribed on the bookshelf, merged into one feed (`author` =
       公众号名). Follows shelf membership dynamically.
+    * `earss://weread/shelf?mps=MP_WXS_A,MP_WXS_B` — shelf, but only the
+      listed 公众号 (comma-separated; bare digits auto-prefixed).
+    * `earss://weread/shelf?exclude=MP_WXS_C` — shelf minus the listed
+      公众号.
     * `earss://weread/mp/:bookId` — a single 公众号's articles.
       `bookId` accepts `MP_WXS_<digits>` or bare digits (auto-prefixed).
 
@@ -69,8 +73,8 @@ defmodule EarssSourceWeread.Adapter do
   @impl true
   def resolve(input) when is_binary(input) do
     case URI.parse(String.trim(input)) do
-      %URI{scheme: "earss", host: "weread", path: path} ->
-        resolve_path(path)
+      %URI{scheme: "earss", host: "weread", path: path, query: query} ->
+        resolve_path(path, query)
 
       _ ->
         {:error, :unknown_route}
@@ -79,14 +83,19 @@ defmodule EarssSourceWeread.Adapter do
 
   def resolve(_), do: {:error, :invalid_input}
 
-  defp resolve_path(path) do
+  defp resolve_path(path, query_string) do
+    params = parse_params(query_string)
+
     cond do
       path in ["/shelf", "/shelf/"] ->
-        ok_resolve(%{
-          source_url: "earss://weread/shelf",
-          title: Config.shelf_title(),
-          meta: %{kind: "shelf"}
-        })
+        with {:ok, mps} <- parse_id_list(Map.get(params, "mps")),
+             {:ok, exclude} <- parse_id_list(Map.get(params, "exclude")) do
+          ok_resolve(%{
+            source_url: canonical_shelf_url(mps, exclude),
+            title: Config.shelf_title(),
+            meta: %{kind: "shelf", mps: mps, exclude: exclude}
+          })
+        end
 
       String.starts_with?(path, "/mp/") ->
         with {:ok, book_id} <- MP.normalize_book_id(String.replace_prefix(path, "/mp/", "")) do
@@ -102,6 +111,58 @@ defmodule EarssSourceWeread.Adapter do
     end
   end
 
+  # Shelf filter: white-list `mps` first, then drop `exclude`.
+  defp apply_shelf_filter(mps, %{mps: whitelist, exclude: exclude}) do
+    mps
+    |> Enum.filter(fn mp -> whitelist == [] or mp.book_id in whitelist end)
+    |> Enum.reject(fn mp -> mp.book_id in exclude end)
+  end
+
+  defp parse_params(nil), do: %{}
+
+  defp parse_params(query) when is_binary(query) do
+    query
+    |> URI.decode_query()
+    |> Map.new(fn {k, v} -> {k, String.trim(v)} end)
+  end
+
+  defp parse_id_list(nil), do: {:ok, []}
+  defp parse_id_list(""), do: {:ok, []}
+
+  defp parse_id_list(raw) when is_binary(raw) do
+    raw
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reduce_while({:ok, []}, fn id, {:ok, acc} ->
+      case MP.normalize_book_id(id) do
+        {:ok, norm} -> {:cont, {:ok, [norm | acc]}}
+        {:error, _} -> {:halt, {:error, :invalid_book_id}}
+      end
+    end)
+    |> case do
+      {:ok, ids} -> {:ok, Enum.reverse(ids)}
+      err -> err
+    end
+  end
+
+  # Stable canonical shelf URL: canonical ids, supported params only, sorted.
+  defp canonical_shelf_url(mps, exclude) do
+    pairs =
+      [{"mps", mps}, {"exclude", exclude}]
+      |> Enum.filter(fn {_k, ids} -> ids != [] end)
+      |> Enum.map(fn {k, ids} -> {k, Enum.join(ids, ",")} end)
+      |> Enum.sort()
+
+    case pairs do
+      [] ->
+        "earss://weread/shelf"
+
+      list ->
+        "earss://weread/shelf?" <>
+          Enum.map_join(list, "&", fn {k, v} -> "#{k}=#{URI.encode(v)}" end)
+    end
+  end
+
   defp ok_resolve(base) do
     {:ok, Map.merge(base, Politeness.default_plugin_intervals())}
   end
@@ -113,8 +174,8 @@ defmodule EarssSourceWeread.Adapter do
     link = field(feed, :link) || ""
 
     case resolve(link) do
-      {:ok, %{meta: %{kind: "shelf"}}} ->
-        fetch_shelf(feed, opts)
+      {:ok, %{meta: %{kind: "shelf"} = meta}} ->
+        fetch_shelf(feed, opts, meta)
 
       {:ok, %{meta: %{kind: "mp", book_id: book_id}}} ->
         fetch_mp(feed, book_id, opts)
@@ -124,12 +185,12 @@ defmodule EarssSourceWeread.Adapter do
     end
   end
 
-  defp fetch_shelf(feed, opts) do
+  defp fetch_shelf(feed, opts, meta) do
     force? = Keyword.get(opts, :force, false)
 
     case Shelf.fetch() do
       {:ok, mps} ->
-        mps = maybe_cap(mps)
+        mps = mps |> apply_shelf_filter(meta) |> maybe_cap()
         seen0 = cursor_seen(feed) |> Map.new()
         state = %{entries: [], seen: seen0, err: nil}
         state = Enum.reduce(mps, state, &poll_mp_list(&1, &2, force?))
