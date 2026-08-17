@@ -37,6 +37,14 @@ defmodule EarssSourceWeread.Config do
     * `EARSS_WEREAD_PUBLIC_CONTENT_INTERVAL_MS` — pause between **public**
       content fetches (mp.weixin.qq.com, no cookie). Default `200`; raise if
       WeChat answers with a captcha/风险页.
+    * `EARSS_WEREAD_CONTENT_FALLBACK_WEREAD` — when the public fetch fails
+      (mp.weixin.qq.com blocks cookie-less access as of 2026-08-17 probing,
+      answering a 参数错误 page), retry via WeRead's own `/web/mp/content`
+      (logged-in cookie channel). Default `true`. Uses
+      `EARSS_WEREAD_CONTENT_INTERVAL_MS` (default `2000`) between fallback
+      requests.
+    * `EARSS_WEREAD_CONTENT_INTERVAL_MS` — pause between `/web/mp/content`
+      (fallback) requests, default `2000`.
     * `EARSS_WEREAD_SHELF_MAX_MPS` — cap the number of 公众号 processed per
       shelf poll (default `0` = unlimited). Useful to bound first-pull time.
     * `EARSS_WEREAD_SHELF_TITLE` — feed title for the shelf route
@@ -181,6 +189,28 @@ defmodule EarssSourceWeread.Config do
       app_get(:public_content_interval_ms) ||
         System.get_env("EARSS_WEREAD_PUBLIC_CONTENT_INTERVAL_MS"),
       200
+    )
+  end
+
+  @doc """
+  Fall back to WeRead's `/web/mp/content` (cookie channel) when the public
+  mp.weixin.qq.com fetch fails? Default `true` — public cookie-less access is
+  unreliable since 2026-08.
+  """
+  @spec content_fallback_weread?() :: boolean()
+  def content_fallback_weread? do
+    env_val =
+      app_get(:content_fallback_weread) || System.get_env("EARSS_WEREAD_CONTENT_FALLBACK_WEREAD")
+
+    truthy?(env_val, true)
+  end
+
+  @doc "Pause between `/web/mp/content` (fallback) requests (ms)."
+  @spec content_interval_ms() :: non_neg_integer()
+  def content_interval_ms do
+    parse_non_neg_int(
+      app_get(:content_interval_ms) || System.get_env("EARSS_WEREAD_CONTENT_INTERVAL_MS"),
+      2_000
     )
   end
 

@@ -37,15 +37,23 @@ Each list item carries everything an entry needs: `reviewId`, `originalId`
 derivation), `title`, `mp_name`, `content` (digest), `time` (real publish
 unix seconds), `pic_url`, `readNum`, `likeNum`.
 
-**Content path (two-channel):**
+**Content path (two-channel, `EARSS_WEREAD_FETCH_CONTENT=true`):**
 
-1. **Public first** — the body is fetched from the public
-   `https://mp.weixin.qq.com/s/<originalId>` URL with **no WeRead cookie**
-   (`EarssSourceWeread.Public`). This is safe against WeRead's rate-limits and
-   is the default.
-2. Articles whose public page has no extractable body (deleted/paid content)
-   degrade gracefully to the digest (`summary`) with a clickable original
-   link.
+1. **Public** — token without `~` → `https://mp.weixin.qq.com/s/<token>`,
+   no cookie (`EarssSourceWeread.Public`).
+2. **WeRead cookie channel** — tokens containing `~` are WeRead **internal
+   ids** (articles first-published in WeRead; there is **no** mp.weixin.qq.com
+   short link — probing confirms even the `~`-stripped prefix answers 参数错误),
+   so the body comes from `/web/mp/content` directly. This is also the
+   automatic fallback when a public fetch fails.
+
+Articles whose body is unavailable everywhere (deleted/placeholder) degrade
+to the digest (`summary`) with a clickable original link.
+
+> 2026-08-17 incident: a deployed version with public-only fetching showed
+> missing bodies for every `~`-titled account (e.g. DeepVan's). The two-channel
+> path fixes it; `EARSS_WEREAD_CONTENT_FALLBACK_WEREAD=true` (default) keeps
+> working even if the public endpoint misbehaves.
 
 **Depth:** the endpoint is **paginated** (`offset` = items already loaded,
 page size fixed at 20). History is limited only by how many pages you

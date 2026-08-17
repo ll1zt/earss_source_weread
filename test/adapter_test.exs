@@ -309,11 +309,67 @@ defmodule EarssSourceWeread.AdapterTest do
         Plug.Conn.resp(conn, 503, "slow down")
       end)
 
+      # fallback also fails
+      Bypass.expect(bypass, "GET", "/web/mp/content", fn conn ->
+        Plug.Conn.resp(conn, 503, "slow down")
+      end)
+
       feed = %{link: "earss://weread/mp/#{@mp1}", adapter_cursor: %{}}
 
       assert {:ok, %{entries: [e]}} = Adapter.fetch(feed)
       assert e.summary == "有摘要"
       refute Map.has_key?(e, :content)
+    end
+
+    test "public failure falls back to the weread content channel", %{bypass: bypass} do
+      stub_articles(bypass, @mp1, [{@t1, "甲第一篇", "摘要1", 1_786_925_450}])
+
+      # public mp.weixin.qq.com answers a dead page
+      Bypass.expect(bypass, "GET", "/s/#{@t1}", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html", "utf-8")
+        |> Plug.Conn.resp(200, "<html><body><div>参数错误</div></body></html>")
+      end)
+
+      # weread cookie channel works
+      Bypass.expect(bypass, "GET", "/web/mp/content", fn conn ->
+        assert conn.query_string =~ @review1
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html", "utf-8")
+        |> Plug.Conn.resp(
+          200,
+          "<html><body><div id=\"js_content\"><p>cookie通道正文</p></div></body></html>"
+        )
+      end)
+
+      feed = %{link: "earss://weread/mp/#{@mp1}", adapter_cursor: %{}}
+
+      assert {:ok, %{entries: [e]}} = Adapter.fetch(feed)
+      assert e.content =~ "cookie通道正文"
+    end
+
+    test "tokens containing ~ go straight to the weread channel", %{bypass: bypass} do
+      t = "token~tilde"
+      review = "MP_WXS_100001_#{t}"
+      stub_articles(bypass, @mp1, [{t, "甲第一~篇", "摘要1", 1_786_925_450}])
+
+      # public endpoint is never called (no /s/ stub → any hit fails loudly)
+      Bypass.expect(bypass, "GET", "/web/mp/content", fn conn ->
+        assert conn.query_string =~ review
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html", "utf-8")
+        |> Plug.Conn.resp(
+          200,
+          "<html><body><div id=\"js_content\"><p>cookie通道正文~</p></div></body></html>"
+        )
+      end)
+
+      feed = %{link: "earss://weread/mp/#{@mp1}", adapter_cursor: %{}}
+
+      assert {:ok, %{entries: [e]}} = Adapter.fetch(feed)
+      assert e.content =~ "cookie通道正文"
     end
 
     test "no new article returns :not_modified", %{bypass: bypass} do
