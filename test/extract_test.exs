@@ -51,4 +51,26 @@ defmodule EarssSourceWeread.ExtractTest do
     assert {:error, :content_not_found} = Extract.js_content("<html><body></body></html>")
     assert {:error, :content_not_found} = Extract.js_content("")
   end
+
+  test "removes WeChat's hidden style from the root node" do
+    html =
+      ~s(<html><body><div id="js_content" style="visibility: hidden; opacity: 0; font-size: 17px;">) <>
+        ~s(<p>正文内容</p></div></body></html>)
+
+    assert {:ok, out} = Extract.js_content(html)
+    refute out =~ "visibility"
+    refute out =~ "opacity"
+    assert out =~ "font-size: 17px"
+    assert out =~ "正文内容"
+  end
+
+  test "drops the style attribute entirely when only hidden declarations" do
+    html =
+      ~s(<html><body><div id="js_content" style="visibility: hidden;opacity: 0">) <>
+        ~s(<p>x</p></div></body></html>)
+
+    assert {:ok, out} = Extract.js_content(html)
+    refute out =~ "style"
+    assert out =~ "<p>x</p>"
+  end
 end

@@ -26,11 +26,47 @@ defmodule EarssSourceWeread.Extract do
         {:error, :content_not_found}
 
       tree ->
-        {:ok, tree |> strip_noise() |> promote_images() |> Floki.raw_html() |> String.trim()}
+        {:ok,
+         tree
+         |> strip_noise()
+         |> promote_images()
+         |> unclamp()
+         |> Floki.raw_html()
+         |> String.trim()}
     end
   end
 
   def js_content(_), do: {:error, :content_not_found}
+
+  # WeChat's original page hides the body container with inline
+  # `visibility: hidden; opacity: 0` (revealed by JS). We serve static HTML,
+  # so the article would be invisible in renderers (e.g. NetNewsWire's
+  # WebKit). Drop those two declarations from the root node's style.
+  defp unclamp({tag, attrs, children}) do
+    attrs =
+      attrs
+      |> Enum.map(fn
+        {"style", value} ->
+          cleaned =
+            value
+            |> String.replace(~r/visibility\s*:\s*hidden;?\s*/i, "")
+            |> String.replace(~r/opacity\s*:\s*0;?\s*/i, "")
+            |> String.trim()
+
+          {"style", cleaned}
+
+        attr ->
+          attr
+      end)
+      |> Enum.reject(fn
+        {"style", ""} -> true
+        _ -> false
+      end)
+
+    {tag, attrs, children}
+  end
+
+  defp unclamp(node), do: node
 
   defp strip_noise(html_tree) do
     html_tree
