@@ -135,6 +135,128 @@ Earss.Feeds.list_entries(sub.feed) |> Enum.map(& &1.title) |> Enum.take(5)
 > run can take a while (N 公众号 × 2s). Cap it with
 > `EARSS_WEREAD_SHELF_MAX_MPS` or leave content fetch off.
 
+## Deploy & first full backfill
+
+### 0. Reference the plugin from Earss
+
+The plugin is a normal `earss_source_*` OTP app. During **development** use a
+path dep; for **releases/Docker/Nix** prefer a pinned git ref (path deps are
+not available inside container/derivation build contexts):
+
+```bash
+# dev (this repo layout)
+EARSS_SOURCE_PLUGINS=path:../../earss_source_weread
+
+# build server / CI — pin a commit (floating @main changes the deps hash)
+EARSS_SOURCE_PLUGINS=git:https://github.com/<you>/earss_source_weread@<commit-sha>
+```
+
+After changing `EARSS_SOURCE_PLUGINS`: `mix deps.get && mix compile`.
+
+### 1. Development machine (fastest smoke test)
+
+```bash
+cd path/to/earss
+cat >> earss.env <<'EOF'
+EARSS_SOURCE_PLUGINS=path:../../earss_source_weread
+EARSS_WEREAD_COOKIE_CLOUD_URL=http://<cookie-cloud-host>:4000
+EARSS_WEREAD_COOKIE_CLOUD_UUID=<uuid>
+EARSS_WEREAD_COOKIE_CLOUD_TOKEN=<server-password>
+EARSS_WEREAD_BACKFILL_PAGES=5        # first pull ≈ 100 articles per 公众号
+EOF
+mix deps.get && mix compile
+iex -S mix
+```
+
+```elixir
+Earss.Source.Registry.list_adapters() |> Enum.map(& &1.id)   # => ["native", "weread"]
+
+# shelf mode: everything on your bookshelf, backfilled
+{:ok, sub} = Earss.Reader.subscribe(u, %{link: "earss://weread/shelf", refresh: true})
+
+# or single account: targeted backfill
+{:ok, sub} = Earss.Reader.subscribe(u, %{link: "earss://weread/mp/MP_WXS_3528995129", refresh: true})
+
+Earss.Feeds.list_entries(sub.feed) |> Enum.map(& &1.title)   # backfilled history
+```
+
+`refresh: true` triggers the first fetch synchronously — that is the full
+backfill (shelf = N 公众号 × backfill_pages; single = 1 × backfill_pages).
+
+### 2. Docker Compose
+
+Build context must fetch the plugin by git ref, not path:
+
+```yaml
+# docker-compose.yml (earss root repo)
+# Build passes EARSS_SOURCE_PLUGINS to `mix deps.get` inside the image.
+# Set these under environment: for the earss service:
+#   EARSS_WEREAD_COOKIE_CLOUD_URL / _UUID / _TOKEN
+#   EARSS_WEREAD_BACKFILL_PAGES=5
+```
+
+See earss `docs/docker.md` for the base workflow; only the plugin env vars and
+the `EARSS_SOURCE_PLUGINS` build arg change.
+
+### 3. NixOS (homeserver — recommended)
+
+From the **host** flake: build the earss package with the plugin pinned, then
+feed the weread env via `services.earss.environment` (or a systemd drop-in):
+
+```nix
+# host flake
+earssPkg = earss.lib.mkEarss {
+  inherit pkgs;
+  sourcePlugins = "git:https://github.com/<you>/earss_source_weread@<commit>";
+  mixDepsHash = "sha256-…";          # obtain via `nix build` after editing plugins
+};
+
+services.earss = {
+  enable = true;
+  package = earssPkg;
+  # …
+  environment = {
+    EARSS_WEREAD_COOKIE_CLOUD_URL = "http://<cookie-cloud-host>:4000";
+    EARSS_WEREAD_COOKIE_CLOUD_UUID = "<uuid>";
+    EARSS_WEREAD_COOKIE_CLOUD_TOKEN = "<server-password>";
+    EARSS_WEREAD_BACKFILL_PAGES = "5";
+  };
+};
+```
+
+Pin the plugin **commit** (not `@main`) or the fixed-output deps hash breaks
+when the branch moves; refresh `mixDepsHash` after any plugin change (see
+earss `docs/nixos.md`).
+
+### 4. Mix release + systemd
+
+```bash
+export EARSS_SOURCE_PLUGINS='git:https://github.com/<you>/earss_source_weread@<commit>'
+MIX_ENV=prod mix deps.get --only prod
+MIX_ENV=prod mix release
+# on the server: Runtime env via .env / systemd EnvironmentFile — same keys as above
+```
+
+### First-full-history tuning
+
+| Goal | Setting |
+|------|---------|
+| 20 articles per 公众号 | `EARSS_WEREAD_BACKFILL_PAGES=1` |
+| ~100 (default recommendation) | `EARSS_WEREAD_BACKFILL_PAGES=5` |
+| ~200 (deep) | `EARSS_WEREAD_BACKFILL_PAGES=10` |
+
+Notes:
+
+* Backfill happens **only on the first poll** of a feed (empty cursor);
+  afterwards each poll is one list request per 公众号 plus public content
+  fetches for new items only.
+* Each backfill page is one weread request per 公众号. With the shelf route
+  that is `#公众号 × pages` requests on first pull — keep
+  `EARSS_WEREAD_REQUEST_INTERVAL_MS >= 1000` and ensure the browser cookie is
+  fresh before a big first pull (WeRead kicks login on bursts).
+* Bodies come from the **public** mp.weixin.qq.com URLs (no WeRead quota), so
+  deep first pulls are safe from WeRead's perspective.
+
 ## Legal
 
 Scraping 微信读书 / 微信公众号 is subject to WeChat's terms of service and
