@@ -48,6 +48,25 @@ defmodule EarssSourceWeread.ClientTest do
     assert {:error, {:weread, -12000}} = Client.get_json("/web/shelf/sync")
   end
 
+  test "-2041 with a captcha body surfaces as weread_captcha", %{bypass: bypass} do
+    # plain JSON error object → auth atom
+    Bypass.expect(bypass, "GET", "/web/shelf/sync", fn conn ->
+      json_resp(conn, %{"errCode" => -2041, "errMsg" => "风控"})
+    end)
+
+    assert {:error, {:weread_auth, -2041}} = Client.get_json("/web/shelf/sync")
+
+    # HTML captcha page → captcha atom
+    Bypass.expect(bypass, "GET", "/web/mp/articles", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("text/html", "utf-8")
+      |> Plug.Conn.resp(200, "<html><body><div class='tc-captcha'>验证码</div></body></html>")
+    end)
+
+    assert {:error, {:weread_captcha, -2041}} =
+             Client.get_json("/web/mp/articles", query: %{"bookId" => "x", "offset" => "0"})
+  end
+
   test "content endpoint returns raw HTML when decode_html: true", %{bypass: bypass} do
     Bypass.expect(bypass, "GET", "/web/mp/content", fn conn ->
       conn

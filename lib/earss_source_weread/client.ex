@@ -129,7 +129,17 @@ defmodule EarssSourceWeread.Client do
 
           code when code in @auth_codes ->
             Logger.warning("weread #{api_path} auth/风控 errCode=#{code}")
-            {:error, {:weread_auth, code}}
+
+            if captcha?(map) do
+              Logger.warning(
+                "weread requires a CAPTCHA (人机验证) at #{api_path} — resolve it in a browser " <>
+                  "(weread.qq.com), CookieCloud will sync the new cookies"
+              )
+
+              {:error, {:weread_captcha, code}}
+            else
+              {:error, {:weread_auth, code}}
+            end
 
           code ->
             {:error, {:weread, code}}
@@ -139,11 +149,27 @@ defmodule EarssSourceWeread.Client do
         {:error, :invalid_json}
 
       {:error, reason} ->
-        {:error, {:json, reason}}
+        if is_binary(body) and captcha_in_body?(body) do
+          Logger.warning(
+            "weread #{api_path} answered a CAPTCHA page — resolve it in a browser " <>
+              "(weread.qq.com), CookieCloud will sync the new cookies"
+          )
+
+          {:error, {:weread_captcha, -2041}}
+        else
+          {:error, {:json, reason}}
+        end
     end
   end
 
   defp decode_json(_, _), do: {:error, :invalid_json}
+
+  defp captcha_in_body?(body) do
+    String.contains?(body, "tc-captcha") or
+      String.contains?(body, "captcha.gtimg.com") or
+      String.contains?(body, "tcaptcha") or
+      String.contains?(body, "TCaptcha")
+  end
 
   ## auth retry (CookieCloud only)
 
@@ -188,6 +214,18 @@ defmodule EarssSourceWeread.Client do
     ]
 
     {:ok, headers}
+  end
+
+  # -2041 (and friends) can carry a Tencent TCaptcha challenge page in the
+  # response rather than a plain error object.
+  defp captcha?(map) do
+    err = inspect(map)
+
+    String.contains?(err, "tc-captcha") or
+      String.contains?(err, "captcha.gtimg.com") or
+      String.contains?(err, "tcaptcha") or
+      String.contains?(err, "TCaptcha") or
+      String.contains?(err, "验证码")
   end
 
   defp err_code(map) do
